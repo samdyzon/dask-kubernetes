@@ -6,7 +6,7 @@ spec:
   scope: Namespaced
   group: kubernetes.dask.org
   names:
-    kind: Autoscaler
+    kind: DaskAutoscaler
     plural: daskautoscalers
     singular: daskautoscaler
     shortNames:
