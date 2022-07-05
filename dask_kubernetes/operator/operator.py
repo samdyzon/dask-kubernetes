@@ -259,8 +259,13 @@ async def daskworkergroup_update(spec, name, namespace, logger, **kwargs):
             ) as scheduler:
                 logger.info(f"Retiring {-workers_needed} workers")
 
-                await scheduler.retire_workers(
-                    close_workers=True, n=-workers_needed, attribute="name"
+                killed_workers = await scheduler.retire_workers(n=-workers_needed)
+
+            # TODO: Check that were deting workers in the right worker group
+            for worker in killed_workers.values():
+                await api.delete_namespaced_pod(
+                    name=worker["name"],
+                    namespace=namespace,
                 )
 
             logger.info(
