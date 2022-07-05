@@ -257,20 +257,54 @@ async def daskworkergroup_update(spec, name, namespace, logger, **kwargs):
             async with rpc(
                 f"tcp://{spec['cluster']}-service.{namespace}.svc.cluster.local:8786"
             ) as scheduler:
-                worker_ids = await scheduler.workers_to_close(
-                    n=-workers_needed, attribute="name"
+                logger.info(f"Retiring {-workers_needed} workers")
+
+                await scheduler.retire_workers(
+                    close_workers=True, n=-workers_needed, attribute="name"
                 )
 
-            # TODO: Check that were deting workers in the right worker group
-            logger.info(f"Workers to close: {worker_ids}")
-            for wid in worker_ids:
-                await api.delete_namespaced_pod(
-                    name=wid,
-                    namespace=namespace,
-                )
             logger.info(
                 f"Scaled worker group {name} down to {spec['worker']['replicas']} workers."
             )
+
+
+@kopf.timer("daskworkergroup", interval=10.0)
+async def daskworkergroup_manage(spec, name, namespace, logger, **kwargs):
+    async with kubernetes.client.api_client.ApiClient() as api_client:
+        api = kubernetes.client.CoreV1Api(api_client)
+
+        logger.info("Checking number of active workers matches replica requirements.")
+
+        workers = await api.list_namespaced_pod(
+            namespace=namespace,
+            label_selector=f"dask.org/workergroup-name={name}",
+        )
+
+        current_workers = len(workers.items)
+        desired_workers = spec["worker"]["replicas"]
+        workers_needed = desired_workers - current_workers
+
+        if current_workers < desired_workers:
+            logger.info(
+                f"Current number of workers active ({current_workers}) "
+                f"does not match required replicas ({desired_workers}), restarting"
+            )
+            # One or more of our workers has falled over, so we should restart some
+            for _ in range(workers_needed):
+                data = build_worker_pod_spec(
+                    worker_group_name=name,
+                    namespace=namespace,
+                    cluster_name=spec["cluster"],
+                    uuid=uuid4().hex[:10],
+                    spec=spec["worker"]["spec"],
+                )
+                kopf.adopt(data)
+                await api.create_namespaced_pod(
+                    namespace=namespace,
+                    body=data,
+                )
+        else:
+            logger.info("Cluster worker status is OK")
 
 
 @kopf.timer("daskautoscaler", interval=10.0)
